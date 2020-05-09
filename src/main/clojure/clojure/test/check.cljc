@@ -8,7 +8,10 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns clojure.test.check
-  (:require [clojure.test.check.generators :as gen]
+  (:require [#?(:clj com.wsscode.async.async-clj
+                :cljs com.wsscode.async.async-cljs)
+             :refer [let-chan]]
+            [clojure.test.check.generators :as gen]
             [clojure.test.check.random :as random]
             [clojure.test.check.results :as results]
             [clojure.test.check.rose-tree :as rose]
@@ -213,20 +216,21 @@
               result (:result result-map)
               args (:args result-map)
               so-far (inc so-far)]
-          (if (results/pass? result)
-            (do
-              (reporter-fn {:type            :trial
-                            :args            args
-                            :num-tests       so-far
-                            :num-tests-total num-tests
-                            :pass?           true
-                            :property        property
-                            :result          result
-                            :result-data     (results/result-data result)
-                            :seed            seed})
-              (recur so-far rest-size-seq r2))
-            (failure property result-map-rose so-far size
-                     created-seed start-time reporter-fn)))))))
+          (let-chan [result result]
+            (if (results/pass? result)
+              (do
+                (reporter-fn {:type            :trial
+                              :args            args
+                              :num-tests       so-far
+                              :num-tests-total num-tests
+                              :pass?           true
+                              :property        property
+                              :result          result
+                              :result-data     (results/result-data result)
+                              :seed            seed})
+                (recur so-far rest-size-seq r2))
+              (failure property result-map-rose so-far size
+                created-seed start-time reporter-fn))))))))
 
 (defn- smallest-shrink
   [total-nodes-visited depth smallest start-time]
