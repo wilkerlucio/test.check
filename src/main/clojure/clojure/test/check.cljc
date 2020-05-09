@@ -10,7 +10,7 @@
 (ns clojure.test.check
   (:require [#?(:clj com.wsscode.async.async-clj
                 :cljs com.wsscode.async.async-cljs)
-             :refer [let-chan]]
+             :refer [go-promise <?maybe]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.random :as random]
             [clojure.test.check.results :as results]
@@ -216,21 +216,55 @@
               result (:result result-map)
               args (:args result-map)
               so-far (inc so-far)]
-          (let-chan [result result]
-            (if (results/pass? result)
-              (do
-                (reporter-fn {:type            :trial
-                              :args            args
-                              :num-tests       so-far
-                              :num-tests-total num-tests
-                              :pass?           true
-                              :property        property
-                              :result          result
-                              :result-data     (results/result-data result)
-                              :seed            seed})
-                (recur so-far rest-size-seq r2))
-              (failure property result-map-rose so-far size
-                created-seed start-time reporter-fn))))))))
+          (if (results/pass? result)
+            (do
+              (reporter-fn {:type            :trial
+                            :args            args
+                            :num-tests       so-far
+                            :num-tests-total num-tests
+                            :pass?           true
+                            :property        property
+                            :result          result
+                            :result-data     (results/result-data result)
+                            :seed            seed})
+              (recur so-far rest-size-seq r2))
+            (failure property result-map-rose so-far size
+              created-seed start-time reporter-fn)))))))
+
+(defn quick-check-async
+  "Same options as quick-check, but supports async properties."
+  [num-tests property & {:keys [seed max-size reporter-fn]
+                         :or {max-size 200, reporter-fn (constantly nil)}}]
+  (let [[created-seed rng] (make-rng seed)
+        size-seq (gen/make-size-range-seq max-size)
+        start-time (get-current-time-millis)]
+    (go-promise
+     (loop [so-far   0
+            size-seq size-seq
+            rstate   rng]
+       (if (== so-far num-tests)
+         (complete property num-tests created-seed start-time reporter-fn)
+         (let [[size & rest-size-seq] size-seq
+               [r1 r2] (random/split rstate)
+               result-map-rose (gen/call-gen property r1 size)
+               result-map      (rose/root result-map-rose)
+               result          (<?maybe (:result result-map))
+               args            (:args result-map)
+               so-far          (inc so-far)]
+           (if (results/pass? result)
+             (do
+               (reporter-fn {:type            :trial
+                             :args            args
+                             :num-tests       so-far
+                             :num-tests-total num-tests
+                             :pass?           true
+                             :property        property
+                             :result          result
+                             :result-data     (results/result-data result)
+                             :seed            seed})
+               (recur so-far rest-size-seq r2))
+             (failure property result-map-rose so-far size
+               created-seed start-time reporter-fn))))))))
 
 (defn- smallest-shrink
   [total-nodes-visited depth smallest start-time]
