@@ -8,9 +8,12 @@
 ;   You must not remove this notice, or any other, from this software.
 
 (ns clojure.test.check.properties
+  #?(:cljs (:require-macros [clojure.test.check.properties :refer [for-all]]))
   (:require [clojure.test.check.generators :as gen]
-            [clojure.test.check.results :as results])
-  #?(:cljs (:require-macros [clojure.test.check.properties :refer [for-all]])))
+            [clojure.test.check.results :as results]
+            [#?(:clj com.wsscode.async.async-clj
+                :cljs com.wsscode.async.async-cljs)
+             :refer [let-chan*]]))
 
 (defrecord ErrorResult [error]
   results/Result
@@ -28,7 +31,7 @@
   [function]
   (fn [args]
     (let [result (try
-                   (let [ret (apply function args)]
+                   (let-chan* [ret (apply function args)]
                      ;; TCHECK-131: for backwards compatibility (mainly
                      ;; for spec), treat returned exceptions like thrown
                      ;; exceptions
