@@ -1,2 +1,2 @@
 {:paths ["src/main/clojure"]
- :deps {}}
+ :deps  {com.wsscode/async {:mvn/version "1.0.8"}}}
