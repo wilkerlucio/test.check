@@ -1,3 +1,19 @@
+# About this fork
+
+This branch contains a forked version of test.check with the addition of async support.
+
+Async support in this case means that you can write test.check properties that do async
+operations, for example, if you are trying to run a node.js browser emulator to do
+integration tests, the node.js environment will require you to wait for async processes
+to move with the test.
+
+The current test.check can't handle this kind of situation, so I made this fork.
+
+The implementation on this fork rely on Clojure core.async, by using `tc/quick-check-async`
+when returning a core.async channel from your property, this version will park and
+wait for the channel to check the results, this way we can have any kind of async
+validation for property checking, opening the doors for new kinds of generative testing.
+
 # test.check
 
 _test.check_ is a Clojure property-based testing tool inspired by QuickCheck.
