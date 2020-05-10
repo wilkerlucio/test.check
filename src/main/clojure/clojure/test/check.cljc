@@ -10,14 +10,14 @@
 (ns clojure.test.check
   (:require [#?(:clj com.wsscode.async.async-clj
                 :cljs com.wsscode.async.async-cljs)
-             :refer [go-promise <?maybe]]
+             :refer [go-promise <!maybe <?]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.random :as random]
             [clojure.test.check.results :as results]
             [clojure.test.check.rose-tree :as rose]
             [clojure.test.check.impl :refer [get-current-time-millis]]))
 
-(declare shrink-loop failure)
+(declare shrink-loop failure failure-async)
 
 (defn- make-rng
   [seed]
@@ -248,7 +248,7 @@
                [r1 r2] (random/split rstate)
                result-map-rose (gen/call-gen property r1 size)
                result-map      (rose/root result-map-rose)
-               result          (<?maybe (:result result-map))
+               result          (<!maybe (:result result-map))
                args            (:args result-map)
                so-far          (inc so-far)]
            (if (results/pass? result)
@@ -260,11 +260,11 @@
                              :pass?           true
                              :property        property
                              :result          result
-                             :result-data     (results/result-data result)
+                             :result-data     (<!maybe (results/result-data result))
                              :seed            seed})
                (recur so-far rest-size-seq r2))
-             (failure property result-map-rose so-far size
-               created-seed start-time reporter-fn))))))))
+             (<? (failure-async property result-map-rose so-far size
+                 created-seed start-time reporter-fn)))))))))
 
 (defn- smallest-shrink
   [total-nodes-visited depth smallest start-time]
@@ -332,6 +332,50 @@
                 (recur children new-smallest (inc total-nodes-visited) (inc depth))
                 (recur tail new-smallest (inc total-nodes-visited) depth)))))))))
 
+(defn- shrink-loop-async
+  "Like shrink-loop, with async support."
+  [rose-tree reporter-fn]
+  (go-promise
+    (let [start-time         (get-current-time-millis)
+          shrinks-this-depth (rose/children rose-tree)]
+      (loop [nodes               shrinks-this-depth
+             current-smallest    (rose/root rose-tree)
+             total-nodes-visited 0
+             depth               0]
+        (if (empty? nodes)
+          (smallest-shrink total-nodes-visited depth current-smallest start-time)
+          (let [;; can't destructure here because that could force
+                ;; evaluation of (second nodes)
+                head            (first nodes)
+                tail            (rest nodes)
+                result          (<!maybe (:result (rose/root head)))
+                args            (:args (rose/root head))
+                pass?           (results/pass? result)
+                reporter-fn-arg {:type      :shrink-step
+                                 :shrinking {:args                args
+                                             :depth               depth
+                                             :pass?               (boolean pass?)
+                                             :result              result
+                                             :result-data         (results/result-data result)
+                                             :smallest            (:args current-smallest)
+                                             :total-nodes-visited total-nodes-visited}}]
+            (if pass?
+              ;; this node passed the test, so now try testing its right-siblings
+              (do
+                (reporter-fn reporter-fn-arg)
+                (recur tail current-smallest (inc total-nodes-visited) depth))
+              ;; this node failed the test, so check if it has children,
+              ;; if so, traverse down them. If not, save this as the best example
+              ;; seen now and then look at the right-siblings
+              ;; children
+              (let [new-smallest (rose/root head)]
+                (reporter-fn (assoc-in reporter-fn-arg
+                               [:shrinking :smallest]
+                               (:args new-smallest)))
+                (if-let [children (seq (rose/children head))]
+                  (recur children new-smallest (inc total-nodes-visited) (inc depth))
+                  (recur tail new-smallest (inc total-nodes-visited) depth))))))))))
+
 (defn- failure
   [property failing-rose-tree trial-number size seed start-time reporter-fn]
   (let [failed-after-ms (- (get-current-time-millis) start-time)
@@ -357,3 +401,31 @@
       (-> failure-data
           (dissoc :property)
           (assoc :shrunk shrunk)))))
+
+(defn- failure-async
+  [property failing-rose-tree trial-number size seed start-time reporter-fn]
+  (go-promise
+    (let [failed-after-ms (- (get-current-time-millis) start-time)
+          root            (rose/root failing-rose-tree)
+          result          (<!maybe (:result root))
+          failure-data    {:fail            (:args root)
+                           :failing-size    size
+                           :num-tests       trial-number
+                           :pass?           false
+                           :property        property
+                           :result          (legacy-result result)
+                           :result-data     (results/result-data result)
+                           :failed-after-ms failed-after-ms
+                           :seed            seed}]
+
+      (reporter-fn (assoc failure-data :type :failure))
+
+      (let [shrunk (<? (shrink-loop-async failing-rose-tree
+                         #(reporter-fn (merge failure-data %))))]
+        (println "shrunk" shrunk)
+        (reporter-fn (assoc failure-data
+                       :type :shrunk
+                       :shrunk shrunk))
+        (-> failure-data
+            (dissoc :property)
+            (assoc :shrunk shrunk))))))

@@ -13,7 +13,7 @@
             [clojure.test.check.results :as results]
             [#?(:clj com.wsscode.async.async-clj
                 :cljs com.wsscode.async.async-cljs)
-             :refer [let-chan*]]))
+             :refer [go-promise chan? let-chan let-chan* <?]]))
 
 (defrecord ErrorResult [error]
   results/Result
@@ -31,19 +31,27 @@
   [function]
   (fn [args]
     (let [result (try
-                   (let-chan* [ret (apply function args)]
+                   (let-chan [ret (apply function args)]
                      ;; TCHECK-131: for backwards compatibility (mainly
                      ;; for spec), treat returned exceptions like thrown
                      ;; exceptions
-                     (if (exception? ret)
-                       (throw ret)
-                       ret))
+                     (do
+                       (if (exception? ret)
+                         (throw ret)
+                         ret)))
                    #?(:clj (catch java.lang.ThreadDeath t (throw t)))
                    (catch #?(:clj Throwable :cljs :default) ex
                      (->ErrorResult ex)))]
-      {:result result
+      {:result   (if (chan? result)
+                   (go-promise
+                     (try
+                       (<? result)
+                       #?(:clj (catch java.lang.ThreadDeath t (throw t)))
+                       (catch #?(:clj Throwable :cljs :default) ex
+                         (->ErrorResult ex))))
+                   result)
        :function function
-       :args args})))
+       :args     args})))
 
 (defn for-all*
   "A function version of `for-all`. Takes a sequence of N generators
