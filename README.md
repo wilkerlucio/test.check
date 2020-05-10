@@ -9,10 +9,53 @@ to move with the test.
 
 The current test.check can't handle this kind of situation, so I made this fork.
 
+This is usually fine on Clojure land since there we have the ability to block the thread
+when we want, but in Clojurescript this limitation prevents some types of testing.
+
 The implementation on this fork rely on Clojure core.async, by using `tc/quick-check-async`
 when returning a core.async channel from your property, this version will park and
 wait for the channel to check the results, this way we can have any kind of async
 validation for property checking, opening the doors for new kinds of generative testing.
+
+Example of async property checking:
+
+```clojure
+(ns com.wsscode.async-test-async.core
+  (:require [cljs.core.async :as async :refer [go <!]]
+            [clojure.test :refer [deftest is are run-tests testing]]
+            [clojure.test.check :as tc]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]))
+
+; dummy example, but demonstrate how you can run async things on properties
+(def dummy-delay-property
+  (prop/for-all [delay (gen/large-integer** 0 100)]
+    (go
+      (<! (async/timeout delay))
+      (< delay 10))))
+
+(comment
+  ; running it, quick-check-async will return a promise channel
+  (go
+    (cljs.pprint/pprint (<! (tc/quick-check-async 100 dummy-delay-property))))
+
+  ; => result
+  {:shrunk          {:total-nodes-visited 8,
+                     :depth               1,
+                     :pass?               false,
+                     :result              true,
+                     :result-data         nil,
+                     :time-shrinking-ms   61,
+                     :smallest            [10]},
+   :failed-after-ms 27,
+   :num-tests       9,
+   :seed            1589090160519,
+   :fail            [11],
+   :result          false,
+   :result-data     nil,
+   :failing-size    8,
+   :pass?           false})
+```
 
 # test.check
 
